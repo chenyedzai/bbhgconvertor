@@ -66,14 +66,17 @@ def export_repos(username, password,team):
         repo_list_file = open("all_repo_list.txt","a+")
         repo_list_file.write("%s \n" % repo['slug']) 
         repo_list_file.close()
+        
         if repo.get('scm') == "hg":
+            filename = team + "_hg_repo_list.txt"
             hg_repos.append(repo.get("slug"))
-            hg_repo_list = open("hg_repo_list.txt","a+")
+            hg_repo_list = open( filename,"a+")
             hg_repo_list.write("%s \n" % repo['slug'])
             hg_repo_list.close
         else:
+            filename = team + "_git_repo_list.txt"
             git_repos.append(repo.get("slug"))
-            git_repo_list = open("git_repo_list.txt","a+")
+            git_repo_list = open(filename,"a+")
             git_repo_list.write("%s \n" % repo['slug'])
             git_repo_list.close 
     return git_repos, hg_repos, repos
@@ -130,7 +133,7 @@ def convert_repos(hg_cloned_repos, hg_repos, team, repodir, rootpath):
             os.chdir(repo)
             gitcommand = "git init"
             exec_command(gitcommand)
-            convertcommand = "%s/fast-export/hg-fast-export.sh -r %s/%s" % ( rootpath, hg_cloned_repos, repo)
+            convertcommand = "%s/src/fast-export/hg-fast-export.sh -r %s/%s" % ( rootpath, hg_cloned_repos, repo)
             print(convertcommand)
             exec_command(convertcommand)
             os.chdir(pwd)
