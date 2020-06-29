@@ -6,6 +6,9 @@ import shutil
 import subprocess
 import sys
 from getpass import getpass
+import boto3
+import tarfile
+import glob
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -60,6 +63,7 @@ def export_repos(username, password,team):
     repo_list = []
     git_repos = []
     hg_repos = []
+    hg_repos_slugs = []
     repos = sorted(repos, key=lambda repo_: repo_.get("name"))
     for repo in repos:
         repo_list.append(repo.get("slug"))
@@ -69,17 +73,18 @@ def export_repos(username, password,team):
         
         if repo.get('scm') == "hg":
             filename = team + "_hg_repo_list.txt"
-            hg_repos.append(repo.get("slug"))
+            hg_repos.append(repo)
+            hg_repos_slugs.append(repo.get("slug"))
             hg_repo_list = open( filename,"a+")
             hg_repo_list.write("%s \n" % repo['slug'])
             hg_repo_list.close
         else:
             filename = team + "_git_repo_list.txt"
-            git_repos.append(repo.get("slug"))
+            git_repos.append(repo)
             git_repo_list = open(filename,"a+")
             git_repo_list.write("%s \n" % repo['slug'])
             git_repo_list.close 
-    return git_repos, hg_repos, repos
+    return git_repos, hg_repos, repos, hg_repos_slugs
 
 def reposdir(dir, team, scm):
     dir = dir + "/" + team + "_" + scm
@@ -94,29 +99,26 @@ def reposdir(dir, team, scm):
 def exec_command(command):
     subprocess.call(command, shell=True)
 
-def clone_repos(git_repos, hg_repos, team, repodir, hgclone, gitclone, repos):
+def clone_repos (team, clonedir, repos, scm, clone_command):
+    owd = os.getcwd()
+    clonedir = reposdir(clonedir, team, scm)
+    os.chdir(clonedir)
+    pwd = os.getcwd()
 
-    if hgclone == "yes" :
-        scm = "hg"
-        owd = os.getcwd()
-        hgreposdir = reposdir(repodir, team, scm)
-        print(hgreposdir)
-        os.chdir(hgreposdir)
-        pwd = os.getcwd()
-        for repo in repos:
-            slug = repo.get("slug")
-            owner = repo.get("owner").get("username") or repo.get("owner").get("nickname")
-            owner_url = quote(owner)
-            slug_url = quote(slug)
+    for repo in repos:
+        slug = repo.get("slug")
+        owner = repo.get("owner").get("username") or repo.get("owner").get("nickname")
+        owner_url = quote(owner)
+        slug_url = quote(slug)
+        if scm == "hg":
             command = "hg clone ssh://hg@bitbucket.org/%s/%s" % (owner_url, slug_url)
-            exec_command(command)
-        return pwd
-        os.chdir(owd)
-    if  gitclone == "yes":
-        scm = "git"
-        gitreposdir = reposdir(repodir, team, scm)
-    
-def convert_repos(hg_cloned_repos, hg_repos, team, repodir, rootpath):
+        else:
+            command = "git clone git@bitbucket.org:%s/%s.git" % (owner_url, slug_url)
+        exec_command(command)
+    return pwd, clonedir
+    os.chdir(owd)
+
+def convert_repos(clonedir, hg_repos_slugs, team, repodir, rootpath):
     converted_hg_dir = repodir + "/" + team + "converted_hg" 
     if os.path.isdir(converted_hg_dir):
         print("%s path exists", converted_hg_dir)
@@ -125,7 +127,7 @@ def convert_repos(hg_cloned_repos, hg_repos, team, repodir, rootpath):
     os.chdir(converted_hg_dir)
     pwd = os.getcwd()
     print(pwd)
-    for repo in hg_repos:
+    for repo in hg_repos_slugs:
         if os.path.isdir(repo):
             print("not empty")
         else:
@@ -133,10 +135,21 @@ def convert_repos(hg_cloned_repos, hg_repos, team, repodir, rootpath):
             os.chdir(repo)
             gitcommand = "git init"
             exec_command(gitcommand)
-            convertcommand = "%s/src/fast-export/hg-fast-export.sh -r %s/%s" % ( rootpath, hg_cloned_repos, repo)
+            convertcommand = "%s/src/fast-export/hg-fast-export.sh -r %s/%s" % ( rootpath, clonedir, repo)
             print(convertcommand)
             exec_command(convertcommand)
             os.chdir(pwd)
+
+def compress(team, hg_cloned_repos, repodir, hgreposdir):
+    
+    tar_file = hgreposdir + "/" + team + ".tar.gz"
+    with open(tar_file, mode="w:gz") as tar:
+        for repo in glob.glob(os.path.join(hg_cloned_repos, "*")):
+            tar.add(repo)
+    return tar
+
+def push_to_s3():
+    pass
 
 def main():
 
@@ -147,7 +160,8 @@ def main():
     parser.add_argument('-m', '--hgclone',  required=False)
     parser.add_argument('-g', '--gitclone',  required=False)    
     parser.add_argument('-d', '--repodir', required=False )
-    parser.add_argument('-c', '--convert', required=False )    
+    parser.add_argument('-c', '--convert', required=False )
+    parser.add_argument('-tar', '--compress', required=False )    
     args = parser.parse_args()
     print(args.username)
     username = args.username
@@ -158,14 +172,20 @@ def main():
     gitclone = args.gitclone
 
     rootpath = os.getcwd()
-    # print(rootpath)
-    if hgclone or gitclone:
-        git_repos, hg_repos, repos = export_repos(username, password, team)
-        hg_cloned_repos = clone_repos(git_repos, hg_repos, team, repodir, hgclone, gitclone, repos)
-    if args.convert == "yes":
-        convert_repos(hg_cloned_repos, hg_repos, team, repodir, rootpath)
-    else:
-         export_repos(username, password, team)
+    git_repos, hg_repos, repos, hg_repos_slugs = export_repos(username, password, team)
+    if hgclone :
+        scm ="hg"      
+        clone_command = "hg clone ssh://hg@bitbucket.org"
+        hg_cloned_repos,clonedir = clone_repos(team,repodir, hg_repos,scm, clone_command)
+        if args.convert == "yes":
+            convert_repos(clonedir, hg_repos_slugs, team, repodir, rootpath)
+            if args.compress == "yes":
+                compress(team, hg_cloned_repos, repodir, clonedir)
+    if gitclone:
+        scm = "git"
+        clone_command = "git clone git@bitbucket.org:%s/%s.git"
+        clone_repos(team, repodir, git_repos, scm, clone_command)
+
 
 
 if __name__ == "__main__":
