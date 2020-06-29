@@ -66,8 +66,9 @@ def export_repos(username, password,team):
     hg_repos_slugs = []
     repos = sorted(repos, key=lambda repo_: repo_.get("name"))
     for repo in repos:
+        filename = team + "_all_repo_list.txt"
         repo_list.append(repo.get("slug"))
-        repo_list_file = open("all_repo_list.txt","a+")
+        repo_list_file = open(filename,"a+")
         repo_list_file.write("%s \n" % repo['slug']) 
         repo_list_file.close()
         
